@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 from tkinter import *
 from tkinter import messagebox
-from tkinter import Tk, Frame
+from tkinter import Tk, Frame, filedialog
 from tkinter import Label, Button, Entry, Text
 import socket
 import threading
+import os
 
 class ChatTCPApp():
     def __init__(self):
@@ -18,8 +19,9 @@ class ChatTCPApp():
         self.__InputFrame.grid(row=1, column=0)
         self.__ButtonFrame.grid(row=1, column=1)
 
-        Button(self.__ButtonFrame, text="Send", command=lambda: self.SendMessage()).grid(row=1, column=0)
+        Button(self.__ButtonFrame, text="Send", command=lambda: self.SendMessage()).grid(row=2, column=0)
         Button(self.__ButtonFrame, text="Connect", command=lambda: self.Connect()).grid(row=0, column=0)
+        Button(self.__ButtonFrame, text="Attach file", command=lambda: self.AttachFileFuc()).grid(row=1, column=0)
 
         Label(self.__InputFrame, text="Your name ").grid(row=0, column=0)
         Label(self.__InputFrame, text="Server ").grid(row=1, column=0)
@@ -43,6 +45,7 @@ class ChatTCPApp():
         self.__Message.config(state=DISABLED)
 
         self.__sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.__FileAttach = dict()
 
     def SendMessage(self):
         try:
@@ -61,16 +64,34 @@ class ChatTCPApp():
 
     def ReceiveMessage(self):
         try:
-            port = int(self.__Port.get())
-            server = self.__Server.get()
-            name = self.__Name.get()
-            connectmess = f"signup<=>{name}"
-            self.__sock.connect((server, port))
-            self.__sock.send(bytes(connectmess, 'utf-8'))
+            try:
+                port = int(self.__Port.get())
+                server = self.__Server.get()
+                name = self.__Name.get()
+                connectmess = f"signup<=>{name}"
+                self.__sock.connect((server, port))
+                self.__sock.send(bytes(connectmess, 'utf-8'))
+            except:
+                self.__sock.close()
+                self.__sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                messagebox.showerror(title="Connect", message="Can not connect!")
+                return
 
             while True:
-                mess = self.__sock.recv(1024).decode("utf-8")
-
+                
+                mess = self.__sock.recv(5120)
+                if mess[0:1].decode("utf-8") == 'f':
+                    try:
+                        MesssageAttachFile = mess.decode("utf-8").split("#")
+                        self.__FileAttach[MesssageAttachFile[-1]] = open(MesssageAttachFile[-1], mode="wb")
+                        continue
+                    except:
+                        thread = threading.Thread(target=self.ReceiveFile(mess))
+                        thread.start()
+                        thread.join()
+                        continue
+                
+                mess = mess.decode("utf-8") 
                 if mess == "1":
                     self.__sock.send(b"1")
                     continue
@@ -101,13 +122,77 @@ class ChatTCPApp():
         print("TCP Receive Message")
         thread = threading.Thread(target=self.ReceiveMessage)
         thread.start()
+        
+        
+
+        
 
     def SendToServer(self, message):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         port = int(self.__Port.get())
         server = self.__Server.get()
-        sock.connect((server, port))
-        sock.send(message)
+        socksend = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        socksend.connect((server, port))
+        socksend.send(message)
+        socksend.close()
+    
+    def AttachFileFuc(self):
+        threading.Thread(target=self.AttachFile).start()
+
+    def AttachFile(self):
+        try:
+
+            with filedialog.askopenfile(mode="rb", title="Select a file to send") as f:
+
+                name = self.__Name.get()
+                friend = self.__Friend.get()
+                
+                filename = os.path.basename(f.name)
+                filename = f"{name}-{filename}"
+
+                Flag = 1
+
+                Header = f"f#{name}#{friend}#"
+
+                data = f.read(4096)
+
+                self.SendToServer(bytes(f"{Header}{filename}", "utf-8"))
+                
+                while data:
+                    nextdata = f.read(4096)
+                    if not nextdata:
+                        Flag = 0
+
+                    MessageHeader = f"{Header}{Flag}#{filename}#"
+                    if len(MessageHeader) < 1024:
+                        space = (1024-len(MessageHeader))*"$"
+                        MessageHeader = f"{MessageHeader}{space}"
+                        
+                    mess = bytes(f"{MessageHeader}", "utf-8")+data
+                    self.SendToServer(mess)
+                    data = nextdata
+            
+            self.__Message.config(state=NORMAL)
+            self.__Message.insert(END, f"You--->{filename}\n")
+            self.__Message.config(state=DISABLED)
+
+        except:
+            messagebox.showerror(title="Attach file", message="Can not Attach file because no MyID or friendID!")
+
+    def ReceiveFile(self, mess):
+        Header = mess[0:1024].decode("utf-8")
+        data = mess[1024:]
+        Header = Header.split("#")
+        self.__FileAttach[Header[-2]].write(data)
+
+        if Header[-3] == "0":
+            self.__FileAttach[Header[-2]].close()
+            del self.__FileAttach[Header[-2]]
+
+            self.__Message.config(state=NORMAL)
+            self.__Message.insert(END, f"{Header[1]}--->{Header[-2]}\n")
+            self.__Message.config(state=DISABLED)
+
+
 
 
 

@@ -58,21 +58,38 @@ def Forward(packet):
     except:
         print("error Forward(packet)")
 
+
+def ForwardFile(mess):
+    Header = mess[0:1024].decode("utf-8").split("#")
+    global UserConnect
+    try:
+        if CheckUserExist(Header[2]) == True:
+            UserConnect[Header[2]].send(mess)
+    except:
+        print("error ForwardFile")
+
+
+
 def ReceiveFromClient():
     global sock
 
     while True:
         client, address = sock.accept()
+        mess = client.recv(5120)
         print(f"Connect from address: {address}")
 
-        mess = client.recv(1024).decode("utf-8")
-        data = mess.split("<=>")
+        if mess[0:1].decode("utf-8") == "f":
+            threading.Thread(target=ForwardFile, args=(mess,)).start()
+            continue
+
+        data = mess.decode("utf-8").split("<=>")
         if data[0] == "signup":
             thread1 = threading.Thread(target=SignUp, args=(client, data[1],))
             thread1.start()
         elif data[0] == "send":
             thread2 = threading.Thread(target=Forward, args=(data,))
             thread2.start()
+
 
 def UpdateUserConnect():
     global UserConnect, FistTime
@@ -100,7 +117,7 @@ def UpdateUserConnect():
 if __name__ == "__main__":
     
     Binding()
-    sock.listen(10)
+    sock.listen(50)
 
     threadRecv = threading.Thread(target=ReceiveFromClient)
     threadRecv.start()
