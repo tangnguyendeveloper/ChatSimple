@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import socket
-import threading
 import time
+import asyncio
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 UserConnect = {}
@@ -33,65 +33,83 @@ def CheckUserExist(name):
             return True
     return False
 
-def SignUp(client, name):
+async def SignUp(client, name):
     global UserConnect
+    loop = asyncio.get_event_loop()
+
     try:
         if CheckUserExist(name) == True:
-            client.send(b"404")
+            await loop.sock_sendall(client, b"404")
             client.close()
         else:
-            client.send(b'200')
+            await loop.sock_sendall(client, b"200")
             UserConnect[name] = client
     except:
         print("error SignUp(client, name)")
+    
 
 #data frame: send<=>source<=>destination<=>payload
-def Forward(packet):
+async def Forward(packet):
     global UserConnect
+    loop = asyncio.get_event_loop()
+
+    data = ""
+    for i in range(3, len(packet)):
+        data += f"<=>{packet[i]}"
+
     try:
         if CheckUserExist(packet[2]) == True:
-            mess = f"{packet[1]}<=>{packet[3]}"
+            mess = f"{packet[1]}{data}"
             mess = bytes(mess, 'utf-8')
-            UserConnect[packet[2]].send(mess)
+            await loop.sock_sendall(UserConnect[packet[2]], mess)
         else:
             print(f"Can not send from {packet[1]} to {packet[2]}")
     except:
         print("error Forward(packet)")
+    
 
 
-def ForwardFile(mess):
+async def ForwardFile(mess):
+    loop = asyncio.get_event_loop()
     Header = mess[0:1024].decode("utf-8").split("#")
     global UserConnect
     try:
         if CheckUserExist(Header[2]) == True:
-            UserConnect[Header[2]].send(mess)
+            await loop.sock_sendall(UserConnect[Header[2]], mess)
     except:
         print("error ForwardFile")
+    
 
+async def ReceiveFromClient(client, address):
+    loop = asyncio.get_event_loop()
 
+    mess = (await loop.sock_recv(client, 4096))
+    print(f"Connect from address: {address}")
 
-def ReceiveFromClient():
+    if mess[0:1].decode("utf-8") == "f":
+        await loop.create_task(ForwardFile(mess))
+        client.close()
+        return
+
+    data = mess.decode("utf-8").split("<=>")
+    if data[0] == "signup":
+        await loop.create_task(SignUp(client, data[1]))
+    elif data[0] == "send":
+        await loop.create_task(Forward(data))
+        client.close()
+    
+
+async def AcceptClient():
     global sock
 
+    loop = asyncio.get_event_loop()
+
     while True:
-        client, address = sock.accept()
-        mess = client.recv(5120)
-        print(f"Connect from address: {address}")
-
-        if mess[0:1].decode("utf-8") == "f":
-            threading.Thread(target=ForwardFile, args=(mess,)).start()
-            continue
-
-        data = mess.decode("utf-8").split("<=>")
-        if data[0] == "signup":
-            thread1 = threading.Thread(target=SignUp, args=(client, data[1],))
-            thread1.start()
-        elif data[0] == "send":
-            thread2 = threading.Thread(target=Forward, args=(data,))
-            thread2.start()
+        client, address = await loop.sock_accept(sock)
+        await loop.create_task(ReceiveFromClient(client, address))
 
 
-def UpdateUserConnect():
+async def UpdateUserConnect():
     global UserConnect, FistTime
     CurrentTime = time.time()
     if CurrentTime-FistTime > 3600:
@@ -111,16 +129,21 @@ def UpdateUserConnect():
             del UserConnect[i]
         
         FistTime = time.time()
-        
+
+async def main():
+    global sock
+
+    Binding()
+    sock.listen()
+    sock.setblocking(False)
+
+    TaskAccept = asyncio.create_task(AcceptClient())
+    TaskClean = asyncio.create_task(UpdateUserConnect())
+    
+    await TaskAccept
 
 
 if __name__ == "__main__":
     
-    Binding()
-    sock.listen(50)
-
-    threadRecv = threading.Thread(target=ReceiveFromClient)
-    threadRecv.start()
-    threadUpdate = threading.Thread(target=UpdateUserConnect)
-    threadUpdate.start()
-
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
